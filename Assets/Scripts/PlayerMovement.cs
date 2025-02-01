@@ -5,6 +5,7 @@ using TMPro;
 using System.Linq;
 using System;
 using UnityEngine.UI;
+using System.Collections.Generic;
 
 public class PlayerMovement : NetworkBehaviour
 {
@@ -12,8 +13,22 @@ public class PlayerMovement : NetworkBehaviour
     [SerializeField] private AttackProjectile _prefabAttack;
     [SerializeField] private InventoryItem _inventoryItemPrefab;
 
-    [Networked] private TickTimer _delay { get; set; }
-    [Networked] public int Health { get; set; }
+    [Networked] private TickTimer _attackDelay { get; set; }
+    [Networked] private TickTimer _selfHealDelay { get; set; }
+    [Networked] private TickTimer _outOfCombatDelay { get; set; }
+
+    [Networked]
+    [OnChangedRender(nameof(LevelChanged))]
+    public int Level { get; set; }
+
+    [Networked]
+    [OnChangedRender(nameof(XpChanged))]
+    public int KillsUntilLevelUp { get; set; }
+
+    [Networked]
+    [OnChangedRender(nameof(HealthChanged))]
+    public int Health { get; set; }
+    [Networked] public int MaxHealth { get; set; }
     
     /// <summary>
     /// Every point of armor provides 0.1% damage reduction
@@ -27,7 +42,6 @@ public class PlayerMovement : NetworkBehaviour
 
     private TMP_Text _chatBox;
     private GameObject _inventoryScreen;
-    private ChangeDetector _changeDetector;
     private Weapon? _weaponFromServer;
     private Image _healthBarBlood;
 
@@ -38,10 +52,10 @@ public class PlayerMovement : NetworkBehaviour
             var newCameraPosition = Vector2.Lerp(Camera.main.transform.position, transform.position, Time.deltaTime / 0.1f);
             Camera.main.transform.position = new Vector3(newCameraPosition.x, newCameraPosition.y, -10f);
 
-            _healthBarBlood.fillAmount = Health/100f;
+            _healthBarBlood.fillAmount = (float)Health/MaxHealth;
 
             Weapon? playerWeapon = FindObjectsOfType<InventorySlot>(includeInactive: true).Where(slot => slot.IsEquipmentSlot && slot.EquipmentType == EquipmentType.MAIN_HAND).FirstOrDefault()?.InventoryItem?.Item as Weapon;
-            if (playerWeapon?.ItemId != _weaponFromServer?.ItemId)
+            if (playerWeapon?.ItemId != _weaponFromServer?.ItemId || (playerWeapon == null && _weaponFromServer != null))
             {
                 RPC_SendWeaponUpdate(TysonsHelpers.SerializeWeapon(playerWeapon));
                 _weaponFromServer = playerWeapon;
@@ -108,6 +122,20 @@ public class PlayerMovement : NetworkBehaviour
                 Runner.Despawn(Object);
             }
 
+            if (_outOfCombatDelay.ExpiredOrNotRunning(Runner) && _selfHealDelay.ExpiredOrNotRunning(Runner))
+            {
+                Health = Math.Min(Health + MaxHealth/10, MaxHealth);
+                _selfHealDelay = TickTimer.CreateFromSeconds(Runner, 3);
+            }
+
+            if (KillsUntilLevelUp <= 0)
+            {
+                Level++;
+                KillsUntilLevelUp = 10;
+                MaxHealth = 33 * Level;
+                Health = MaxHealth;
+            }
+
             // We are the server in here, so we need to update weapon
             _weaponFromServer = TysonsHelpers.DeserializeWeapon(WeaponNetworkStruct);
         }
@@ -136,13 +164,13 @@ public class PlayerMovement : NetworkBehaviour
 
             // If we are state authority, we can spawn attacks for other players
             // These attacks will only be executed on host and NOT predicted on clients
-            if (HasStateAuthority && _delay.ExpiredOrNotRunning(Runner)  && data.buttons.IsSet(NetworkInputData.MOUSEBUTTON0))
+            if (HasStateAuthority && _attackDelay.ExpiredOrNotRunning(Runner)  && data.buttons.IsSet(NetworkInputData.MOUSEBUTTON0))
             {
                 // Handle weapon attack
                 if (_weaponFromServer != null && _weaponFromServer.FireRate != 0)
                 {
                     // Limit shooting rate
-                    _delay = TickTimer.CreateFromSeconds(Runner, 1f/_weaponFromServer.FireRate);
+                    _attackDelay = TickTimer.CreateFromSeconds(Runner, 1f/_weaponFromServer.FireRate);
 
                     Runner.Spawn(_prefabAttack, transform.position, Quaternion.identity, Object.InputAuthority,
                     (runner, o) =>
@@ -156,7 +184,7 @@ public class PlayerMovement : NetworkBehaviour
                 }
                 else
                 {
-                    _delay = TickTimer.CreateFromSeconds(Runner, 1);
+                    _attackDelay = TickTimer.CreateFromSeconds(Runner, 1);
                 }
             }
         }
@@ -164,8 +192,10 @@ public class PlayerMovement : NetworkBehaviour
 
     public override void Spawned()
     {
-        _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
-        Health = 10000;
+        MaxHealth = 33;
+        Health = MaxHealth;
+        Level = 1;
+        KillsUntilLevelUp = 10;
 
         if (Object.HasInputAuthority)
         {
@@ -174,66 +204,179 @@ public class PlayerMovement : NetworkBehaviour
             FindObjectOfType<Canvas>().transform.Find("Loading").gameObject.SetActive(false);
             _inventoryScreen = FindObjectOfType<Canvas>().transform.Find("Inventory Screen").gameObject;
             _healthBarBlood = FindObjectsOfType<Image>(includeInactive: true).First(e => e.gameObject.name == "Health Bar Blood");
+            FindObjectsOfType<InventoryItem>(includeInactive: true).ForEach(inventoryItem => Destroy(inventoryItem));
+            FindObjectsOfType<InventorySlot>(includeInactive: true).ForEach(inventorySlot => inventorySlot.SetInventoryItem(null));
+            FindObjectOfType<Canvas>().transform.Find("Player Level").GetComponent<TextMeshProUGUI>().text = $"{Level}";
+            FindObjectOfType<Canvas>().transform.Find("XP Bar").GetComponent<Image>().fillAmount = (10 - KillsUntilLevelUp)/10f;
 
             FindObjectsOfType<InventoryItem>(includeInactive: true).ForEach(item => Destroy(item.gameObject));
 
-            // Testing code - spawn two swords in player's inventory (client-side only)
+            // Spawns starting weapon, client-side only
             var sampleWeapon = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
-            sampleWeapon.Item = new Weapon() { Name = "My First Sword", Type = "1H Sword", FireRate = 2, MinDamage = 3, MaxDamage = 10, Range = 7, Speed = 10, ShotType = ShotType.STRAIGHT, EquipmentType = EquipmentType.MAIN_HAND };
+            sampleWeapon.Item = new Weapon() { Name = "Training Sword", Type = "1H Sword", FireRate = 3, MinDamage = 1, MaxDamage = 5, Range = 4, Speed = 10, ShotType = ShotType.STRAIGHT, EquipmentType = EquipmentType.MAIN_HAND };
             sampleWeapon.InventorySlotNumber = 7;
-            var sampleBetterWeapon = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
-            sampleBetterWeapon.Item = new Weapon() { Name = "A Better Sword", Type = "1H Sword", FireRate = 4, MinDamage = 10, MaxDamage = 20, Range = 6, Speed = 8, ShotType = ShotType.STRAIGHT, EquipmentType = EquipmentType.MAIN_HAND };
-            sampleBetterWeapon.InventorySlotNumber = 8;
 
             _inventoryScreen.gameObject.SetActive(false);
         }
     }
 
+    void HealthChanged(NetworkBehaviourBuffer buffer)
+    {
+        var prevValue = GetPropertyReader<int>(nameof(Health)).Read(buffer);
+
+        if (Health > prevValue)
+        {
+            GetComponentInChildren<SpriteRenderer>().color = Color.green;
+        }
+        else
+        {
+            GetComponentInChildren<SpriteRenderer>().color = Color.red;
+        }
+    }
+
+    void LevelChanged(NetworkBehaviourBuffer buffer)
+    {
+        if (Object.HasInputAuthority)
+        {
+            FindObjectOfType<Canvas>().transform.Find("Player Level").GetComponent<TextMeshProUGUI>().text = $"{Level}";
+        }
+    }
+
+    void XpChanged(NetworkBehaviourBuffer buffer)
+    {
+        if (Object.HasInputAuthority)
+        {
+            FindObjectOfType<Canvas>().transform.Find("XP Bar").GetComponent<Image>().fillAmount = (10 - KillsUntilLevelUp)/10f;
+        }
+    }
+
     public override void Render()
     {
-        foreach (var change in _changeDetector.DetectChanges(this))
-        {
-            switch (change)
-            {
-                case nameof(Health):
-                    GetComponentInChildren<SpriteRenderer>().color = Color.red;
-                    break;
-            }
-        }
-
         GetComponentInChildren<SpriteRenderer>().color = Color.Lerp(GetComponentInChildren<SpriteRenderer>().color, Color.blue, Time.deltaTime / 0.4f);
     }
 
-    public void SpawnLootForSelf()
+    public void SpawnLootForSelf(int enemyLevel)
     {
-        var newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
+        // State Authority gave us permission here so we are okay to spawn loot for ourselves
+
+        InventoryItem? newItem = null;
         
         var random = new System.Random();
-        var randomInt = random.Next(0, 5);
+        var randomInt = random.Next(0, 10);
+
+        // Minimum armor range will be the armor of two levels below the enemy's level with a minimum of 1
+        int minArmor = (int)Math.Floor(_levelToMaxArmor[Math.Max(1, enemyLevel - 2)] / 4f);
+        // Maximum armor range will be the armor for the enemy level
+        int maxArmor = (int)Math.Floor(_levelToMaxArmor[enemyLevel] / 4f);
+
+        // Minimum DPS range will be the DPS of two levels below the enemy's level with a minimum of 1
+        int minDps = _levelToMaxDps[Math.Max(1, enemyLevel - 2)];
+        // Maximum DPS range will be the DPS for the enemy level
+        int maxDps = _levelToMaxDps[enemyLevel];
 
         switch (randomInt)
         {
             case 0:
-                newItem.Item = Weapon.GenerateWeapon();
+                newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
+                newItem.Item = Weapon.GenerateWeapon(random.Next(minDps, maxDps + 1));
                 break;
             case 1: 
-                newItem.Item = new Armor(EquipmentType.HEAD, "Iron Helm", "Head", random.Next(0, 101));
+                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+                newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
+                newItem.Item = new Armor(EquipmentType.HEAD, "Iron Helm", "Head", random.Next(minArmor, maxArmor + 1));
                 break;
             case 2: 
-                newItem.Item = new Armor(EquipmentType.TORSO, "Iron Chestplate", "Torso", random.Next(0, 101));
+                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+                newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
+                newItem.Item = new Armor(EquipmentType.TORSO, "Iron Chestplate", "Torso", random.Next(minArmor, maxArmor + 1));
                 break;
             case 3: 
-                newItem.Item = new Armor(EquipmentType.LEGS, "Leather Greaves", "Legs", random.Next(0, 101));
+                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+                newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
+                newItem.Item = new Armor(EquipmentType.LEGS, "Leather Greaves", "Legs", random.Next(minArmor, maxArmor + 1));
                 break;
             case 4: 
-                newItem.Item = new Armor(EquipmentType.FEET, "Leather Boots", "Feet", random.Next(0, 101));
+                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+                newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
+                newItem.Item = new Armor(EquipmentType.FEET, "Leather Boots", "Feet", random.Next(minArmor, maxArmor + 1));
                 break;
             default:
                 break;
         }
         
-        newItem.InventorySlotNumber = FindObjectsOfType<InventorySlot>(includeInactive: true).Where(slot => !slot.IsEquipmentSlot && slot.InventoryItem == null).Min(slot => slot.SlotNumber);
-}
+        if (newItem != null)
+        {
+            newItem.InventorySlotNumber = FindObjectsOfType<InventorySlot>(includeInactive: true).Where(slot => !slot.IsEquipmentSlot && slot.InventoryItem == null).Min(slot => slot.SlotNumber);
+        }
+    }
+
+    private Dictionary<int, int> _levelToMaxArmor = new Dictionary<int, int>
+    {
+        {1, 4},
+        {2, 13},
+        {3, 26},
+        {4, 39},
+        {5, 52},
+        {6, 65},
+        {7, 78},
+        {8, 91},
+        {9, 104},
+        {10, 117},
+        {11, 130},
+        {12, 143},
+        {13, 156},
+        {14, 169},
+        {15, 182},
+        {16, 195},
+        {17, 208},
+        {18, 221},
+        {19, 234},
+        {20, 247},
+        {21, 260},
+        {22, 273},
+        {23, 286},
+        {24, 299},
+        {25, 312},
+        {26, 325},
+        {27, 338},
+        {28, 351},
+        {29, 364},
+        {30, 400}
+    };
+
+    private Dictionary<int, int> _levelToMaxDps = new Dictionary<int, int>
+    {
+        {1, 20},
+        {2, 30},
+        {3, 40},
+        {4, 50},
+        {5, 60},
+        {6, 70},
+        {7, 80},
+        {8, 90},
+        {9, 100},
+        {10, 600},
+        {11, 610},
+        {12, 620},
+        {13, 630},
+        {14, 640},
+        {15, 650},
+        {16, 660},
+        {17, 670},
+        {18, 680},
+        {19, 690},
+        {20, 5000},
+        {21, 5080},
+        {22, 5160},
+        {23, 5240},
+        {24, 5320},
+        {25, 5400},
+        {26, 5480},
+        {27, 5560},
+        {28, 5640},
+        {29, 5720},
+        {30, 10000}
+    };
 
     private void OnTriggerEnter2D(Collider2D other)
     {
@@ -246,6 +389,8 @@ public class PlayerMovement : NetworkBehaviour
                     int damageAmount = (int)(attackProjectile.Damage * (1f - (Armor / 1000f)));
                     Health -= damageAmount;
                     Debug.Log($"Player with {Armor} armor took {attackProjectile.Damage} reduced to {damageAmount} damage and now has {Health} health!");
+
+                    _outOfCombatDelay = TickTimer.CreateFromSeconds(Runner, 7);
 
                     Runner.Despawn(attackProjectile.Object);
                 }

@@ -45,11 +45,12 @@ public class StaticCallHandler : NetworkBehaviour
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All, HostMode = RpcHostMode.SourceIsServer)]
-    public void RPC_SendLootToPlayer(int playerId, RpcInfo info = default)
+    public void RPC_SendLootToPlayer(int playerId, int enemyLevel, RpcInfo info = default)
     {
+        // Here we as State Authority give permission to client to spawn loot
         if (playerId == FindObjectOfType<BasicSpawner>().MyPlayerId)
         {
-            FindObjectsOfType<PlayerMovement>().First(playerMovement => playerMovement.HasInputAuthority).SpawnLootForSelf();
+            FindObjectsOfType<PlayerMovement>().First(playerMovement => playerMovement.HasInputAuthority).SpawnLootForSelf(enemyLevel);
         }
     }
 }

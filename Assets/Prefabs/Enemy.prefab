@@ -557,7 +557,7 @@ GameObject:
   - component: {fileID: 8720670249574167667}
   - component: {fileID: 3967678886474736868}
   m_Layer: 0
-  m_Name: Hexagon Pointed-Top
+  m_Name: Enemy Sprite
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

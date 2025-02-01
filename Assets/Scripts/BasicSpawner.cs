@@ -30,6 +30,7 @@ public class BasicSpawner : MonoBehaviour, INetworkRunnerCallbacks
     [SerializeField] private WeaponTooltip _weaponTooltipPrefab;
     [SerializeField] private ArmorTooltip _armorTooltipPrefab;
     [SerializeField] private NetworkPrefabRef _respawnHandlerPrefab;
+    [SerializeField] private GameObject _playerSpawnPoint;
 
 #region INetworkRunnerCallbacks
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player) { OnPlayerJoinedInternal(runner, player); }
@@ -145,8 +146,7 @@ public class BasicSpawner : MonoBehaviour, INetworkRunnerCallbacks
     {
         if (runner.IsServer)
         {
-            Vector3 spawnPosition = new Vector3();
-            NetworkObject playerNetworkObject = runner.Spawn(_playerPrefab, spawnPosition, Quaternion.identity, player);
+            NetworkObject playerNetworkObject = runner.Spawn(_playerPrefab, _playerSpawnPoint.transform.position, Quaternion.identity, player);
             playerNetworkObject.GetComponent<PlayerMovement>().PlayerId = player.PlayerId;
             _spawnedCharacters.Add(player, playerNetworkObject);
 
@@ -196,8 +196,17 @@ public class BasicSpawner : MonoBehaviour, INetworkRunnerCallbacks
             {
                 if (!_isDragging && GetEventSystemRaycastResults().Any(e => e.gameObject.GetComponent<InventoryItem>()))
                 {
-                    _isDragging = true;
-                    GetEventSystemRaycastResults().First(e => e.gameObject.GetComponent<InventoryItem>()).gameObject.GetComponent<InventoryItem>().IsBeingDragged = true;
+                    if (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl))
+                    {
+                        // Delete Inventory Item & Free Slot
+                        Destroy(GetEventSystemRaycastResults().First(e => e.gameObject.GetComponent<InventoryItem>()).gameObject);
+                        GetEventSystemRaycastResults().Where(e => e.gameObject.GetComponent<InventorySlot>()).ForEach(raycastResult => raycastResult.gameObject.GetComponent<InventorySlot>().SetInventoryItem(null));
+                    }
+                    else
+                    {
+                        _isDragging = true;
+                        GetEventSystemRaycastResults().First(e => e.gameObject.GetComponent<InventoryItem>()).gameObject.GetComponent<InventoryItem>().IsBeingDragged = true;
+                    }
                 }
             }
             else
@@ -288,8 +297,7 @@ public class BasicSpawner : MonoBehaviour, INetworkRunnerCallbacks
         // I am the State Authority here, so I can spawn a new player GameObject
         var existingPlayerEntryKey = _spawnedCharacters.First(player => player.Key.PlayerId == playerId).Key;
 
-        Vector3 spawnPosition = new Vector3();
-        NetworkObject playerNetworkObject = _networkRunner.Spawn(_playerPrefab, spawnPosition, Quaternion.identity, existingPlayerEntryKey);
+        NetworkObject playerNetworkObject = _networkRunner.Spawn(_playerPrefab, _playerSpawnPoint.transform.position, Quaternion.identity, existingPlayerEntryKey);
         playerNetworkObject.GetComponent<PlayerMovement>().PlayerId = playerId;
         _spawnedCharacters[existingPlayerEntryKey] = playerNetworkObject;
     }

@@ -1,4 +1,6 @@
 #nullable enable
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using Fusion;
 using TMPro;
@@ -10,13 +12,17 @@ public class BasicEnemy : NetworkBehaviour
     [Networked] private int _level { get; set; }
     [Networked] private int _health { get; set; }
     [Networked] private int _maxHealth { get; set; }
+    [Networked] private int _playerWithClaim { get; set; }
     [Networked] private TickTimer _shootingDelay { get; set; }
     [Networked] private TickTimer _standingDelay { get; set; }
+    [Networked] private TickTimer _timeUntilGiveUp { get; set; }
+    [Networked]
+    [OnChangedRender(nameof(IsRetreatingChanged))]
+    private bool _isRetreating { get; set; }
 
     [SerializeField] private GameObject _damageIndicator;
     [SerializeField] private int _aggroRadius;
     [SerializeField] private AttackProjectile _prefabAttack;
-    [SerializeField] private int _playerWithClaim = -1;
 
     private ChangeDetector _changeDetector;
     private PlayerMovement? _closestPlayer;
@@ -31,7 +37,13 @@ public class BasicEnemy : NetworkBehaviour
         {
             if (HasStateAuthority && _playerWithClaim != -1)
             {
-                FindObjectOfType<StaticCallHandler>().RPC_SendLootToPlayer(_playerWithClaim);
+                PlayerMovement playerToReward = FindObjectsOfType<PlayerMovement>().FirstOrDefault(player => player.PlayerId == _playerWithClaim);
+                if (playerToReward != null && playerToReward.Level <= _level)
+                {
+                    FindObjectsOfType<PlayerMovement>().First(player => player.PlayerId == _playerWithClaim).KillsUntilLevelUp -= 1;
+                }
+                
+                FindObjectOfType<StaticCallHandler>().RPC_SendLootToPlayer(_playerWithClaim, _level);
             }
 
             _spawner.OnEnemyDeath();
@@ -44,9 +56,17 @@ public class BasicEnemy : NetworkBehaviour
         var allPlayers = FindObjectsOfType<PlayerMovement>();
         _closestPlayer = allPlayers.OrderBy(player => ((Vector2)player.transform.position - (Vector2)transform.position).magnitude).FirstOrDefault();
 
+        if (HasStateAuthority && _timeUntilGiveUp.ExpiredOrNotRunning(Runner))
+        {
+            _playerWithClaim = -1;
+        }
+
         if (_closestPlayer != null)
         {
-            if (((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).magnitude <= _aggroRadius)
+            // We have not been hit in so long and are outside of range of our spawner
+            _isRetreating = _isRetreating || _timeUntilGiveUp.ExpiredOrNotRunning(Runner) && ((Vector2)_spawner.transform.position - (Vector2)transform.position).magnitude > _spawner.spawnRadius * 1.5f;
+            if (((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).magnitude <= _aggroRadius
+                    && !_isRetreating)
             {
                 NavMeshPath path = new();
                 NavMesh.CalculatePath(transform.position, _closestPlayer.transform.position, NavMesh.AllAreas, path);
@@ -71,36 +91,48 @@ public class BasicEnemy : NetworkBehaviour
             }
             else
             {
-                if (_wanderingPoint == null)
+                if (HasStateAuthority)
                 {
-                    _wanderingPoint = _spawner.GetPointInSpawnRadius();
-                }
-
-                if (!_standingDelay.ExpiredOrNotRunning(Runner))
-                {
-                    // We are standing, so let's get a next spot
-                    _wanderingPoint = _spawner.GetPointInSpawnRadius(); // this could be optimized to not get called repeatedly while standing still
-                }
-                else
-                {
-                    if (((Vector2)transform.position - (Vector2)_wanderingPoint!).magnitude < 0.1)
+                    if (_isRetreating)
                     {
-                        // Reached our wandering destination, so let's wait for a bit
-                        _standingDelay = TickTimer.CreateFromSeconds(Runner, _random.Next(2, 7));
+                        // We have returned to our range
+                        if (((Vector2)_spawner.transform.position - (Vector2)transform.position).magnitude < _spawner.spawnRadius)
+                        {
+                            _isRetreating = false;
+                        }
+                    }
+
+                    if (_wanderingPoint == null)
+                    {
+                        _wanderingPoint = _spawner.GetPointInSpawnRadius();
+                    }
+
+                    if (!_standingDelay.ExpiredOrNotRunning(Runner))
+                    {
+                        // We are standing, so let's get a next spot
+                        _wanderingPoint = _spawner.GetPointInSpawnRadius(); //TODO this could be optimized to not get called repeatedly while standing still
                     }
                     else
                     {
-                        // Move towards the wandering point
-                        NavMeshPath path = new NavMeshPath();
-                        NavMesh.CalculatePath(transform.position, (Vector2)_wanderingPoint, NavMesh.AllAreas, path);
-                        var direction = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
-                        gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (direction * 3f * Runner.DeltaTime));
+                        if (((Vector2)transform.position - (Vector2)_wanderingPoint!).magnitude < 0.1)
+                        {
+                            // Reached our wandering destination, so let's wait for a bit
+                            _standingDelay = TickTimer.CreateFromSeconds(Runner, _random.Next(2, 7));
+                        }
+                        else
+                        {
+                            // Move towards the wandering point
+                            NavMeshPath path = new NavMeshPath();
+                            NavMesh.CalculatePath(transform.position, (Vector2)_wanderingPoint, NavMesh.AllAreas, path);
+                            var direction = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
+                            gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (direction * 3f * Runner.DeltaTime));
+                        }
                     }
                 }
             }
-
-            gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
         }
+
+        gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
     }
   
     public override void Spawned()
@@ -108,16 +140,11 @@ public class BasicEnemy : NetworkBehaviour
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
         _closestPlayer = null;
         _random = new System.Random();
-
-        _enemyWeapon = new Weapon
+        
+        if (HasStateAuthority)
         {
-            MinDamage = 10,
-            MaxDamage = 20,
-            FireRate = 2f,
-            Speed = 10f,
-            Range = 10f,
-            ShotType =  ShotType.STRAIGHT
-        };
+            _playerWithClaim = -1;
+        }
 
         // When client player joins late, need to update UI elementa to match current state
         if (_maxHealth > 0)
@@ -129,6 +156,40 @@ public class BasicEnemy : NetworkBehaviour
             gameObject.GetComponentsInChildren<Transform>().FirstOrDefault(t => t.gameObject.name == "Level").GetComponent<TextMeshPro>().text = $"{_level}";
         }
     }
+
+    private Dictionary<int, int> _levelToDps = new Dictionary<int, int>
+    {
+        {1, 4},
+        {2, 8},
+        {3, 13},
+        {4, 17},
+        {5, 22},
+        {6, 26},
+        {7, 31},
+        {8, 36},
+        {9, 42},
+        {10, 47},
+        {11, 53},
+        {12, 60},
+        {13, 67},
+        {14, 73},
+        {15, 80},
+        {16, 86},
+        {17, 94},
+        {18, 101},
+        {19, 109},
+        {20, 113},
+        {21, 123},
+        {22, 134},
+        {23, 144},
+        {24, 154},
+        {25, 166},
+        {26, 178},
+        {27, 189},
+        {28, 202},
+        {29, 215},
+        {30, 300}
+    };
 
     public override void Render()
     {
@@ -154,17 +215,20 @@ public class BasicEnemy : NetworkBehaviour
             }
         }
 
-        var targetColor = new Color(195/255f, 49/255f, 72/255f);
+        var targetColor = (_playerWithClaim == -1 || _playerWithClaim == FindObjectOfType<BasicSpawner>().MyPlayerId) ? new Color(195/255f, 49/255f, 72/255f) : Color.grey;
         GetComponentInChildren<SpriteRenderer>().color = Color.Lerp(GetComponentInChildren<SpriteRenderer>().color, targetColor, Time.deltaTime / 0.4f);
     }
 
     private void OnTriggerEnter2D(Collider2D other)
     {
-        if (other.TryGetComponent(out AttackProjectile attackProjectile) && attackProjectile.ShooterId != -1)
+        if (other.TryGetComponent(out AttackProjectile attackProjectile)
+                && attackProjectile.ShooterId != -1
+                && !_isRetreating)
         {
             if (HasStateAuthority)
             {
                 _health -= attackProjectile.Damage;
+                _timeUntilGiveUp = TickTimer.CreateFromSeconds(Runner, 3);
                 //Debug.Log($"Enemy took {attackProjectile.Damage} damage from Player: {attackProjectile.ShooterId} and now has {_health} health!");
 
                 if (_playerWithClaim == -1)
@@ -194,6 +258,19 @@ public class BasicEnemy : NetworkBehaviour
 
         _level = level;
 
+        _enemyWeapon = new Weapon
+        {
+            MinDamage = (int)Math.Ceiling(_levelToDps[_level]/2f),
+            MaxDamage = (int)Math.Ceiling(_levelToDps[_level]/2f),
+            FireRate = 2f,
+            Speed = 10f,
+            Range = 10f,
+            ShotType =  ShotType.STRAIGHT
+        };
+
+        // Wait a bit before attacking to prevent spawn sniping
+        _shootingDelay = TickTimer.CreateFromSeconds(Runner, 2f);
+
         // Calculate health
         if (_level < 10)
         {
@@ -201,15 +278,15 @@ public class BasicEnemy : NetworkBehaviour
         }
         else if (_level < 20)
         {
-            _maxHealth = 100 * _level;
+            _maxHealth = 150 * _level;
         }
         else if (_level < 30)
         {
-            _maxHealth = 450 * _level;
+            _maxHealth = 1000 * _level;
         }
         else
         {
-            _maxHealth = 9999; // oopsie :)
+            _maxHealth = 345000; // Boss
         }
 
         _health = _maxHealth;
@@ -219,5 +296,19 @@ public class BasicEnemy : NetworkBehaviour
     public void SetSpawner(EnemySpawner spawner)
     {
         _spawner = spawner;
+    }
+
+    void IsRetreatingChanged(NetworkBehaviourBuffer buffer)
+    {
+        SpriteRenderer healthSprite = gameObject.GetComponentsInChildren<Transform>().FirstOrDefault(t => t.gameObject.name == "Health Bar Sprite").GetComponent<SpriteRenderer>();
+        if (_isRetreating)
+        {
+            healthSprite.color = Color.grey;
+            _health = _maxHealth;
+        }
+        else
+        {
+            healthSprite.color = new Color(52/255f, 168/255f, 66/255f);
+        }
     }
 }

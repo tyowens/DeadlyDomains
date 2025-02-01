@@ -8,10 +8,10 @@ public class EnemySpawner : NetworkBehaviour
     private System.Random _random = new System.Random();
     private int _enemyCount = 0;
 
+    [SerializeField] public int spawnRadius;
     [SerializeField] private BasicEnemy _basicEnemyPrefab;
     [SerializeField] private int _lowerLevel;
     [SerializeField] private int _upperLevel;
-    [SerializeField] private int _spawnRadius;
     [SerializeField] private int _maxEnemyCount;
 
     public override void FixedUpdateNetwork()
@@ -24,8 +24,8 @@ public class EnemySpawner : NetworkBehaviour
             enemy.CalculateMaxHealth(_random.Next(_lowerLevel, _upperLevel + 1));
             _enemyCount++;
 
-            // Limit spawning rate
-            _tickDelay = TickTimer.CreateFromSeconds(Runner, 20);
+            // By default spawn enemies at this rate
+            _tickDelay = TickTimer.CreateFromSeconds(Runner, 5f);
         }
     }
 
@@ -42,7 +42,7 @@ public class EnemySpawner : NetworkBehaviour
 
         while (attempt < 30 && (testPoint == null || !NavMesh.SamplePosition((Vector3)testPoint, out hit, 3f, NavMesh.AllAreas)))
         {
-            testPoint = (Vector2)transform.position + (Random.insideUnitCircle * _spawnRadius);
+            testPoint = (Vector2)transform.position + (Random.insideUnitCircle * spawnRadius);
         }
 
         return hit.position;
@@ -52,11 +52,10 @@ public class EnemySpawner : NetworkBehaviour
     {
         if (_enemyCount == _maxEnemyCount)
         {
+            // If we are at max enemies, give time to let the player try to wipe out them all
             _tickDelay = TickTimer.CreateFromSeconds(Runner, 20);
         }
 
         _enemyCount--;
-
-        _tickDelay = TickTimer.CreateFromSeconds(Runner, 20);
     }
 }
