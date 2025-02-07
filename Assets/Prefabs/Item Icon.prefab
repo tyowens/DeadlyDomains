@@ -89,11 +89,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 90b34b4da20f34347975d8556f9364ce, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  swordSprite: {fileID: 21300000, guid: 9fa0ea5fb4a25dd4a8952a5d4ccb38a1, type: 3}
-  helmSprite: {fileID: 21300000, guid: b2170c0a616f29f4794f01d5536ecd52, type: 3}
-  chestPlateSprite: {fileID: 21300000, guid: 95f322319e4788847ba574f6e2abf936, type: 3}
-  pantsSprite: {fileID: 21300000, guid: 07a31aecc103c864bb3def9600041b4e, type: 3}
-  bootsSprite: {fileID: 21300000, guid: 7f5c7a38a7577f349b469acf2dc1892a, type: 3}
+  swordSprite: {fileID: -40302377144446070, guid: 411f9911ddb3d0e49b7de8e23b03eb68, type: 3}
+  helmSprite: {fileID: 4019806805982871070, guid: 6780576630689b54a95879a7658d7192, type: 3}
+  chestPlateSprite: {fileID: -8429085618289835315, guid: 85e794473d85800439c579bc5132d038, type: 3}
+  pantsSprite: {fileID: 4964655336654476249, guid: 66f9893b995a90141bc21881a02192f1, type: 3}
+  bootsSprite: {fileID: 1632343405005103548, guid: 59f5031ab5995f04a9bbb81e78461a35, type: 3}
 --- !u!1 &5823479330035259996
 GameObject:
   m_ObjectHideFlags: 0

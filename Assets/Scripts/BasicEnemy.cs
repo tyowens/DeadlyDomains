@@ -65,13 +65,13 @@ public class BasicEnemy : NetworkBehaviour
         {
             // We have not been hit in so long and are outside of range of our spawner
             _isRetreating = _isRetreating || _timeUntilGiveUp.ExpiredOrNotRunning(Runner) && ((Vector2)_spawner.transform.position - (Vector2)transform.position).magnitude > _spawner.spawnRadius * 1.5f;
+            Vector2 directionToMove = Vector2.zero;
             if (((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).magnitude <= _aggroRadius
                     && !_isRetreating)
             {
                 NavMeshPath path = new();
                 NavMesh.CalculatePath(transform.position, _closestPlayer.transform.position, NavMesh.AllAreas, path);
-                var direction = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
-                gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (direction * 3f * Runner.DeltaTime));
+                directionToMove = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
 
                 if (HasStateAuthority && _shootingDelay.ExpiredOrNotRunning(Runner))
                 {
@@ -124,12 +124,23 @@ public class BasicEnemy : NetworkBehaviour
                             // Move towards the wandering point
                             NavMeshPath path = new NavMeshPath();
                             NavMesh.CalculatePath(transform.position, (Vector2)_wanderingPoint, NavMesh.AllAreas, path);
-                            var direction = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
-                            gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (direction * 3f * Runner.DeltaTime));
+                            directionToMove = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
                         }
                     }
                 }
             }
+
+            var closeEnemies = FindObjectsOfType<BasicEnemy>()
+                                .Where(enemy => ((Vector2)enemy.transform.position - (Vector2)transform.position).magnitude < 2)
+                                .Where(enemy => ((Vector2)enemy.transform.position - (Vector2)transform.position).magnitude > 0.2)
+                                .ToList();
+            
+            foreach (var closeEnemy in closeEnemies)
+            {
+                directionToMove += ((Vector2)closeEnemy.transform.position - (Vector2)transform.position).normalized * -0.3f * (2f - (((Vector2)closeEnemy.transform.position - (Vector2)transform.position).magnitude) / 2f);
+            }
+
+            gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (directionToMove.normalized * 3f * Runner.DeltaTime));
         }
 
         gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;

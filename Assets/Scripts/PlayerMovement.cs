@@ -72,6 +72,11 @@ public class PlayerMovement : NetworkBehaviour
             {
                 _inventoryScreen.SetActive(!_inventoryScreen.activeSelf);
             }
+
+            if (Input.GetKeyDown(KeyCode.Escape))
+            {
+                _inventoryScreen.SetActive(false);
+            }
         }
     }
 
@@ -132,7 +137,7 @@ public class PlayerMovement : NetworkBehaviour
             {
                 Level++;
                 KillsUntilLevelUp = 10;
-                MaxHealth = 33 * Level;
+                MaxHealth = 10000 * Level;
                 Health = MaxHealth;
             }
 
@@ -192,7 +197,7 @@ public class PlayerMovement : NetworkBehaviour
 
     public override void Spawned()
     {
-        MaxHealth = 33;
+        MaxHealth = 10000;
         Health = MaxHealth;
         Level = 1;
         KillsUntilLevelUp = 10;
@@ -214,7 +219,7 @@ public class PlayerMovement : NetworkBehaviour
             // Spawns starting weapon, client-side only
             var sampleWeapon = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
             sampleWeapon.Item = new Weapon() { Name = "Training Sword", Type = "1H Sword", FireRate = 3, MinDamage = 1, MaxDamage = 5, Range = 4, Speed = 10, ShotType = ShotType.STRAIGHT, EquipmentType = EquipmentType.MAIN_HAND };
-            sampleWeapon.InventorySlotNumber = 7;
+            sampleWeapon.InventorySlotNumber = FindObjectsOfType<InventorySlot>(includeInactive: true).First(slot => slot.EquipmentType == EquipmentType.MAIN_HAND).SlotNumber;
 
             _inventoryScreen.gameObject.SetActive(false);
         }
