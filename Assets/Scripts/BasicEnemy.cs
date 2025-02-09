@@ -23,6 +23,7 @@ public class BasicEnemy : NetworkBehaviour
     [SerializeField] private GameObject _damageIndicator;
     [SerializeField] private int _aggroRadius;
     [SerializeField] private AttackProjectile _prefabAttack;
+    [SerializeField] private bool _isMelee;
 
     private ChangeDetector _changeDetector;
     private PlayerMovement? _closestPlayer;
@@ -64,7 +65,12 @@ public class BasicEnemy : NetworkBehaviour
         if (_closestPlayer != null)
         {
             // We have not been hit in so long and are outside of range of our spawner
-            _isRetreating = _isRetreating || _timeUntilGiveUp.ExpiredOrNotRunning(Runner) && ((Vector2)_spawner.transform.position - (Vector2)transform.position).magnitude > _spawner.spawnRadius * 1.5f;
+            _isRetreating = _isRetreating ||
+                                    (_timeUntilGiveUp.ExpiredOrNotRunning(Runner) &&
+                                        (((Vector2)_spawner.transform.position - (Vector2)transform.position).magnitude > _spawner.spawnRadius * 1.5f
+                                        || ((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).magnitude > _aggroRadius * 1.2f));
+            if (_isRetreating) { _health = _maxHealth; }
+
             Vector2 directionToMove = Vector2.zero;
             if (((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).magnitude <= _aggroRadius
                     && !_isRetreating)
@@ -73,10 +79,10 @@ public class BasicEnemy : NetworkBehaviour
                 NavMesh.CalculatePath(transform.position, _closestPlayer.transform.position, NavMesh.AllAreas, path);
                 directionToMove = ((Vector2)path.corners[1] - (Vector2)transform.position).normalized;
 
-                if (HasStateAuthority && _shootingDelay.ExpiredOrNotRunning(Runner))
+                if (!_isMelee && HasStateAuthority && _shootingDelay.ExpiredOrNotRunning(Runner))
                 {
                     // Limit shooting rate
-                    _shootingDelay = TickTimer.CreateFromSeconds(Runner, 1f);
+                    _shootingDelay = TickTimer.CreateFromSeconds(Runner, 1f/_enemyWeapon.FireRate);
 
                     Runner.Spawn(_prefabAttack, transform.position, Quaternion.identity, Object.InputAuthority,
                     (runner, o) =>
@@ -140,7 +146,10 @@ public class BasicEnemy : NetworkBehaviour
                 directionToMove += ((Vector2)closeEnemy.transform.position - (Vector2)transform.position).normalized * -0.3f * (2f - (((Vector2)closeEnemy.transform.position - (Vector2)transform.position).magnitude) / 2f);
             }
 
-            gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (directionToMove.normalized * 3f * Runner.DeltaTime));
+            float speed = 3f;
+            speed *= _isMelee ? 3f : 1f; // melee enemies get a 2x speed
+
+            gameObject.GetComponent<Rigidbody2D>().MovePosition((Vector2)transform.position + (directionToMove.normalized * speed * Runner.DeltaTime));
         }
 
         gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
@@ -211,7 +220,8 @@ public class BasicEnemy : NetworkBehaviour
                 switch (change)
                 {
                     case nameof(_health):
-                        GetComponentInChildren<SpriteRenderer>().color = Color.red;
+                        // Disabling enemies from flashing red, because cannot tell if they are grey or not
+                        //GetComponentInChildren<SpriteRenderer>().color = Color.red;
                         var healthBarTransform = gameObject.GetComponentsInChildren<Transform>().FirstOrDefault(t => t.gameObject.name == "Health Bar");
 
                         if (healthBarTransform == null || _maxHealth <= 0) { break; }
@@ -260,6 +270,10 @@ public class BasicEnemy : NetworkBehaviour
             {
                 Runner.Despawn(attackProjectile.Object);
             }
+            else
+            {
+                Destroy(attackProjectile.gameObject);
+            }
         }
     }
     
@@ -274,7 +288,7 @@ public class BasicEnemy : NetworkBehaviour
             MinDamage = (int)Math.Ceiling(_levelToDps[_level]/2f),
             MaxDamage = (int)Math.Ceiling(_levelToDps[_level]/2f),
             FireRate = 2f,
-            Speed = 10f,
+            Speed = 8f,
             Range = 10f,
             ShotType =  ShotType.STRAIGHT
         };

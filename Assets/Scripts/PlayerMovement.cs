@@ -36,6 +36,7 @@ public class PlayerMovement : NetworkBehaviour
     [Networked] public int Armor { get; set; }
     [Networked] public int PlayerId { get; set; }
     [Networked] public Vector2 PlayerPosition { get; set; }
+    [Networked] public Color PlayerColor { get; set; }
 
     // NetworkStruct needs to be a ref in order to get ref for modification rather than value copy
     [Networked] public ref WeaponNetworkStruct WeaponNetworkStruct  => ref MakeRef<WeaponNetworkStruct>();
@@ -118,6 +119,13 @@ public class PlayerMovement : NetworkBehaviour
         Armor = armorAmount;
     }
 
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority, HostMode = RpcHostMode.SourceIsHostPlayer)]
+    public void RPC_SendColorUpdate(Color color, RpcInfo info = default)
+    {
+        // I am the State Authority here, so I can update the Networked property
+        PlayerColor = color;
+    }
+
     public override void FixedUpdateNetwork()
     {
         if (HasStateAuthority)
@@ -129,15 +137,15 @@ public class PlayerMovement : NetworkBehaviour
 
             if (_outOfCombatDelay.ExpiredOrNotRunning(Runner) && _selfHealDelay.ExpiredOrNotRunning(Runner))
             {
-                Health = Math.Min(Health + MaxHealth/10, MaxHealth);
-                _selfHealDelay = TickTimer.CreateFromSeconds(Runner, 3);
+                Health = Math.Min(Health + MaxHealth/5, MaxHealth);
+                _selfHealDelay = TickTimer.CreateFromSeconds(Runner, 2);
             }
 
             if (KillsUntilLevelUp <= 0)
             {
                 Level++;
                 KillsUntilLevelUp = 10;
-                MaxHealth = 10000 * Level;
+                MaxHealth = 33 * Level;
                 Health = MaxHealth;
             }
 
@@ -184,7 +192,7 @@ public class PlayerMovement : NetworkBehaviour
                         _weaponFromServer.Attack(o);
                         o.GetComponent<AttackProjectile>().ShooterId = PlayerId;
                         o.GetComponent<AttackProjectile>().Direction = (data.clickLocation - (Vector2)transform.position).normalized;
-                        o.GetComponent<AttackProjectile>().Color = Color.blue;
+                        o.GetComponent<AttackProjectile>().Color = PlayerColor;
                     });
                 }
                 else
@@ -197,7 +205,7 @@ public class PlayerMovement : NetworkBehaviour
 
     public override void Spawned()
     {
-        MaxHealth = 10000;
+        MaxHealth = 33;
         Health = MaxHealth;
         Level = 1;
         KillsUntilLevelUp = 10;
@@ -220,6 +228,8 @@ public class PlayerMovement : NetworkBehaviour
             var sampleWeapon = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
             sampleWeapon.Item = new Weapon() { Name = "Training Sword", Type = "1H Sword", FireRate = 3, MinDamage = 1, MaxDamage = 5, Range = 4, Speed = 10, ShotType = ShotType.STRAIGHT, EquipmentType = EquipmentType.MAIN_HAND };
             sampleWeapon.InventorySlotNumber = FindObjectsOfType<InventorySlot>(includeInactive: true).First(slot => slot.EquipmentType == EquipmentType.MAIN_HAND).SlotNumber;
+
+            RPC_SendColorUpdate(FindObjectsOfType<Image>(includeInactive: true).First(image => image.gameObject.name == "Preview Image").color);
 
             _inventoryScreen.gameObject.SetActive(false);
         }
@@ -257,7 +267,7 @@ public class PlayerMovement : NetworkBehaviour
 
     public override void Render()
     {
-        GetComponentInChildren<SpriteRenderer>().color = Color.Lerp(GetComponentInChildren<SpriteRenderer>().color, Color.blue, Time.deltaTime / 0.4f);
+        GetComponentInChildren<SpriteRenderer>().color = Color.Lerp(GetComponentInChildren<SpriteRenderer>().color, PlayerColor, Time.deltaTime / 0.4f);
     }
 
     public void SpawnLootForSelf(int enemyLevel)
@@ -267,7 +277,7 @@ public class PlayerMovement : NetworkBehaviour
         InventoryItem? newItem = null;
         
         var random = new System.Random();
-        var randomInt = random.Next(0, 10);
+        var randomInt = random.Next(0, 18);
 
         // Minimum armor range will be the armor of two levels below the enemy's level with a minimum of 1
         int minArmor = (int)Math.Floor(_levelToMaxArmor[Math.Max(1, enemyLevel - 2)] / 4f);
@@ -279,31 +289,42 @@ public class PlayerMovement : NetworkBehaviour
         // Maximum DPS range will be the DPS for the enemy level
         int maxDps = _levelToMaxDps[enemyLevel];
 
+        // "Boss" level enemies should always drop loot, for now...
+        if (enemyLevel == 10)
+        {
+            randomInt = random.Next(0, 5);
+        }
+
         switch (randomInt)
         {
             case 0:
                 newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
                 newItem.Item = Weapon.GenerateWeapon(random.Next(minDps, maxDps + 1));
+                SpawnLootForSelf(enemyLevel); // roll again :)
                 break;
-            case 1: 
-                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+            case 1:
+                if (enemyLevel == 1) { SpawnLootForSelf(enemyLevel); return; } // Level 1 enemies do not spawn armor
                 newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
                 newItem.Item = new Armor(EquipmentType.HEAD, "Iron Helm", "Head", random.Next(minArmor, maxArmor + 1));
+                SpawnLootForSelf(enemyLevel); // roll again :)
                 break;
-            case 2: 
-                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+            case 2:
+                if (enemyLevel == 1) { SpawnLootForSelf(enemyLevel); return; } // Level 1 enemies do not spawn armor
                 newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
                 newItem.Item = new Armor(EquipmentType.TORSO, "Iron Chestplate", "Torso", random.Next(minArmor, maxArmor + 1));
+                SpawnLootForSelf(enemyLevel); // roll again :)
                 break;
-            case 3: 
-                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+            case 3:
+                if (enemyLevel == 1) { SpawnLootForSelf(enemyLevel); return; } // Level 1 enemies do not spawn armor
                 newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
                 newItem.Item = new Armor(EquipmentType.LEGS, "Leather Greaves", "Legs", random.Next(minArmor, maxArmor + 1));
+                SpawnLootForSelf(enemyLevel); // roll again :)
                 break;
-            case 4: 
-                if (enemyLevel == 1) { return; } // Level 1 enemies do not spawn armor
+            case 4:
+                if (enemyLevel == 1) { SpawnLootForSelf(enemyLevel); return; } // Level 1 enemies do not spawn armor
                 newItem = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
                 newItem.Item = new Armor(EquipmentType.FEET, "Leather Boots", "Feet", random.Next(minArmor, maxArmor + 1));
+                SpawnLootForSelf(enemyLevel); // roll again :)
                 break;
             default:
                 break;
@@ -385,11 +406,11 @@ public class PlayerMovement : NetworkBehaviour
 
     private void OnTriggerEnter2D(Collider2D other)
     {
-        if (HasStateAuthority)
+        if (other.TryGetComponent(out AttackProjectile attackProjectile))
         {
-            if (other.TryGetComponent(out AttackProjectile attackProjectile))
+            if (attackProjectile.ShooterId != PlayerId)
             {
-                if (attackProjectile.ShooterId != PlayerId)
+                if (HasStateAuthority)
                 {
                     int damageAmount = (int)(attackProjectile.Damage * (1f - (Armor / 1000f)));
                     Health -= damageAmount;
@@ -399,7 +420,23 @@ public class PlayerMovement : NetworkBehaviour
 
                     Runner.Despawn(attackProjectile.Object);
                 }
+                else
+                {
+                    Destroy(attackProjectile.gameObject);
+                }
             }
+        }
+    }
+
+    public void TakeDamageFromSwordSwing(int swordDamage)
+    {
+        if (HasStateAuthority)
+        {
+            int damageAmount = (int)(swordDamage * (1f - (Armor / 1000f)));
+            Health -= damageAmount;
+            Debug.Log($"Player with {Armor} armor took {damageAmount} reduced to {damageAmount} damage and now has {Health} health!");
+
+            _outOfCombatDelay = TickTimer.CreateFromSeconds(Runner, 7);
         }
     }
 
