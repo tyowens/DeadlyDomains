@@ -37,4 +37,19 @@ public class AttackProjectile : NetworkBehaviour
     {
         gameObject.GetComponentInChildren<SpriteRenderer>().color = Color;
     }
+
+    void OnTriggerEnter2D(Collider2D collider2D)
+    {
+        if (collider2D.TryGetComponent(out ProjectileCollider _))
+        {
+            if (HasStateAuthority)
+            {
+                Runner.Despawn(Object);
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
+        }
+    }
 }
