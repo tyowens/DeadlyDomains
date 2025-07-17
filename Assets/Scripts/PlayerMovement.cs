@@ -16,6 +16,7 @@ public class PlayerMovement : NetworkBehaviour
     [Networked] private TickTimer _attackDelay { get; set; }
     [Networked] private TickTimer _selfHealDelay { get; set; }
     [Networked] private TickTimer _outOfCombatDelay { get; set; }
+    [Networked] private TickTimer _rollingDelay { get; set; }
 
     [Networked]
     [OnChangedRender(nameof(LevelChanged))]
@@ -38,6 +39,7 @@ public class PlayerMovement : NetworkBehaviour
     [Networked] public Vector2 PlayerPosition { get; set; }
     [Networked] public Color PlayerColor { get; set; }
     [Networked] public Vector2 WalkingDirection { get; set; }
+    [Networked] public bool IsRolling { get; set; }
 
     // NetworkStruct needs to be a ref in order to get ref for modification rather than value copy
     [Networked] public ref WeaponNetworkStruct WeaponNetworkStruct  => ref MakeRef<WeaponNetworkStruct>();
@@ -62,8 +64,10 @@ public class PlayerMovement : NetworkBehaviour
 
         if (Object.HasInputAuthority)
         {
-            Camera.main.transform.SetParent(transform);
-            Camera.main.transform.localPosition = new Vector3(0f, 0f, -10f);
+            if (Health > 0)
+            {
+                Camera.main.transform.localPosition = new Vector3(0f, 0f, -10f);
+            }
 
             _healthBarBlood.fillAmount = (float)Health / MaxHealth;
 
@@ -81,6 +85,14 @@ public class PlayerMovement : NetworkBehaviour
                 RPC_SendMessage("ggez");
             }
 
+            if (Input.GetKeyDown(KeyCode.Space)
+                && !IsRolling
+                && _rollingDelay.ExpiredOrNotRunning(Runner)
+                && WalkingDirection.magnitude > 0)
+            {
+                RPC_SendRoll();
+            }
+
             if (Input.GetKeyDown(KeyCode.I))
             {
                 _inventoryScreen.SetActive(!_inventoryScreen.activeSelf);
@@ -90,6 +102,22 @@ public class PlayerMovement : NetworkBehaviour
             {
                 _inventoryScreen.SetActive(false);
             }
+        }
+    }
+
+    public void StartRolling()
+    {
+        if (HasStateAuthority)
+        {
+            IsRolling = true;
+        }
+    }
+
+    public void StopRolling()
+    {
+        if (HasStateAuthority)
+        {
+            IsRolling = false;
         }
     }
 
@@ -145,14 +173,45 @@ public class PlayerMovement : NetworkBehaviour
         WalkingDirection = walkingDirection;
     }
 
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority, HostMode = RpcHostMode.SourceIsHostPlayer)]
+    public void RPC_SendRoll(RpcInfo info = default)
+    {
+        RPC_RelayRoll();
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All, HostMode = RpcHostMode.SourceIsServer)]
+    public void RPC_RelayRoll(RpcInfo info = default)
+    {
+        _animator.SetTrigger("Roll");
+
+        if (HasStateAuthority)
+        {
+            // I am the State Authority here, so I can update the Networked property
+            _rollingDelay = TickTimer.CreateFromSeconds(Runner, 1.5f);
+        }
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority, HostMode = RpcHostMode.SourceIsServer)]
+    public void RPC_DespawnCallingPlayer(RpcInfo info = default)
+    {
+        Runner.Despawn(Object);
+    }
+
     public override void FixedUpdateNetwork()
     {
-        if (HasStateAuthority)
+        if (HasInputAuthority)
         {
             if (Health <= 0)
             {
                 Camera.main.transform.SetParent(null);
-                Runner.Despawn(Object);
+                RPC_DespawnCallingPlayer();
+            }
+        }
+
+        if (HasStateAuthority)
+        {
+            if (Health <= 0)
+            {
                 return;
             }
 
@@ -176,54 +235,62 @@ public class PlayerMovement : NetworkBehaviour
 
         if (GetInput(out NetworkInputData data))
         {
-            data.direction.Normalize();
-
-            if (HasInputAuthority)
+            if (IsRolling)
             {
-                RPC_SendWalkingDirectionUpdate(data.direction);
+                gameObject.GetComponent<Rigidbody2D>().MovePosition(gameObject.transform.position + _playerSpeed * 2f * (Vector3)WalkingDirection * Runner.DeltaTime);
+                gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
             }
-
-            gameObject.GetComponent<Rigidbody2D>().MovePosition(gameObject.transform.position + _playerSpeed * data.direction * Runner.DeltaTime);
-            gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
-
-            if (HasStateAuthority)
+            else
             {
-                PlayerPosition = transform.position;
-            }
+                data.direction.Normalize();
 
-            if (HasInputAuthority && !HasStateAuthority)
-            {
-                // If we are a non-host client and getting out of sync, then get location from Networked property
-                if ((PlayerPosition - (Vector2)transform.position).magnitude > 1)
+                if (HasInputAuthority)
                 {
-                    gameObject.GetComponent<Rigidbody2D>().MovePosition(PlayerPosition);
-                    gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
+                    RPC_SendWalkingDirectionUpdate(data.direction);
                 }
-            }
 
-            // If we are state authority, we can spawn attacks for other players
-            // These attacks will only be executed on host and NOT predicted on clients
-            if (HasStateAuthority && _attackDelay.ExpiredOrNotRunning(Runner) && data.buttons.IsSet(NetworkInputData.MOUSEBUTTON0))
-            {
-                // Handle weapon attack
-                if (_weaponFromServer != null && _weaponFromServer.FireRate != 0)
+                gameObject.GetComponent<Rigidbody2D>().MovePosition(gameObject.transform.position + _playerSpeed * data.direction * Runner.DeltaTime);
+                gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
+
+                if (HasStateAuthority)
                 {
-                    // Limit shooting rate
-                    _attackDelay = TickTimer.CreateFromSeconds(Runner, 1f / _weaponFromServer.FireRate);
+                    PlayerPosition = transform.position;
+                }
 
-                    Runner.Spawn(_prefabAttack, transform.position, Quaternion.identity, Object.InputAuthority,
-                    (runner, o) =>
+                if (HasInputAuthority && !HasStateAuthority)
+                {
+                    // If we are a non-host client and getting out of sync, then get location from Networked property
+                    if ((PlayerPosition - (Vector2)transform.position).magnitude > 1)
                     {
-                        // This callback will be called after instantiating object but before it is synchronized
-                        _weaponFromServer.Attack(o);
-                        o.GetComponent<AttackProjectile>().ShooterId = PlayerId;
-                        o.GetComponent<AttackProjectile>().Direction = (data.clickLocation - (Vector2)transform.position).normalized;
-                        o.GetComponent<AttackProjectile>().Color = PlayerColor;
-                    });
+                        gameObject.GetComponent<Rigidbody2D>().MovePosition(PlayerPosition);
+                        gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
+                    }
                 }
-                else
+
+                // If we are state authority, we can spawn attacks for other players
+                // These attacks will only be executed on host and NOT predicted on clients
+                if (HasStateAuthority && _attackDelay.ExpiredOrNotRunning(Runner) && data.buttons.IsSet(NetworkInputData.MOUSEBUTTON0))
                 {
-                    _attackDelay = TickTimer.CreateFromSeconds(Runner, 1);
+                    // Handle weapon attack
+                    if (_weaponFromServer != null && _weaponFromServer.FireRate != 0)
+                    {
+                        // Limit shooting rate
+                        _attackDelay = TickTimer.CreateFromSeconds(Runner, 1f / _weaponFromServer.FireRate);
+
+                        Runner.Spawn(_prefabAttack, transform.position, Quaternion.identity, Object.InputAuthority,
+                        (runner, o) =>
+                        {
+                            // This callback will be called after instantiating object but before it is synchronized
+                            _weaponFromServer.Attack(o);
+                            o.GetComponent<AttackProjectile>().ShooterId = PlayerId;
+                            o.GetComponent<AttackProjectile>().Direction = (data.clickLocation - (Vector2)transform.position).normalized;
+                            o.GetComponent<AttackProjectile>().Color = PlayerColor;
+                        });
+                    }
+                    else
+                    {
+                        _attackDelay = TickTimer.CreateFromSeconds(Runner, 1);
+                    }
                 }
             }
         }
@@ -249,8 +316,8 @@ public class PlayerMovement : NetworkBehaviour
             FindObjectsOfType<InventorySlot>(includeInactive: true).ForEach(inventorySlot => inventorySlot.SetInventoryItem(null));
             FindObjectOfType<Canvas>().transform.Find("Player Level").GetComponent<TextMeshProUGUI>().text = $"{Level}";
             FindObjectOfType<Canvas>().transform.Find("XP Bar").GetComponent<Image>().fillAmount = (10 - KillsUntilLevelUp) / 10f;
-
             FindObjectsOfType<InventoryItem>(includeInactive: true).ForEach(item => Destroy(item.gameObject));
+            Camera.main.transform.SetParent(transform);
 
             // Spawns starting weapon, client-side only
             var sampleWeapon = Instantiate(_inventoryItemPrefab, _inventoryScreen.transform.Find("Items"));
@@ -440,13 +507,16 @@ public class PlayerMovement : NetworkBehaviour
             {
                 if (HasStateAuthority)
                 {
-                    int damageAmount = (int)(attackProjectile.Damage * (1f - (Armor / 1000f)));
-                    Health -= damageAmount;
-                    Debug.Log($"Player with {Armor} armor took {attackProjectile.Damage} reduced to {damageAmount} damage and now has {Health} health!");
+                    if (!IsRolling)
+                    {
+                        int damageAmount = (int)(attackProjectile.Damage * (1f - (Armor / 1000f)));
+                        Health -= damageAmount;
+                        Debug.Log($"Player with {Armor} armor took {attackProjectile.Damage} reduced to {damageAmount} damage and now has {Health} health!");
 
-                    _outOfCombatDelay = TickTimer.CreateFromSeconds(Runner, 7);
+                        _outOfCombatDelay = TickTimer.CreateFromSeconds(Runner, 7);
 
-                    Runner.Despawn(attackProjectile.Object);
+                        Runner.Despawn(attackProjectile.Object);
+                    }
                 }
                 else
                 {
