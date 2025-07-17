@@ -89,9 +89,10 @@ public class BasicEnemy : NetworkBehaviour
                     {
                         // This callback will be called after instantiating object but before it is synchronized
                         _enemyWeapon.Attack(o);
+                        var directionTowardsTarget = ((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).normalized;
                         o.GetComponent<AttackProjectile>().ShooterId = -1;
-                        o.GetComponent<AttackProjectile>().Direction = ((Vector2)_closestPlayer.transform.position - (Vector2)transform.position).normalized;
-                        o.GetComponent<AttackProjectile>().Color = Color.red;
+                        o.GetComponent<AttackProjectile>().Direction = (directionTowardsTarget + (Vector2.Perpendicular(directionTowardsTarget).normalized * _random.Next(0,3) / 10f * (_random.Next(0, 2) == 0 ? -1 : 1))).normalized;
+                        o.GetComponent<AttackProjectile>().Color = Color.red;  
                     });
                 }
             }

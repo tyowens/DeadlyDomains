@@ -37,6 +37,7 @@ public class PlayerMovement : NetworkBehaviour
     [Networked] public int PlayerId { get; set; }
     [Networked] public Vector2 PlayerPosition { get; set; }
     [Networked] public Color PlayerColor { get; set; }
+    [Networked] public Vector2 WalkingDirection { get; set; }
 
     // NetworkStruct needs to be a ref in order to get ref for modification rather than value copy
     [Networked] public ref WeaponNetworkStruct WeaponNetworkStruct  => ref MakeRef<WeaponNetworkStruct>();
@@ -45,15 +46,26 @@ public class PlayerMovement : NetworkBehaviour
     private GameObject _inventoryScreen;
     private Weapon? _weaponFromServer;
     private Image _healthBarBlood;
+    private Animator _animator;
 
     private void Update()
     {
+        // Everyone do this!
+        _animator.SetBool("IsMoving", WalkingDirection.magnitude > 0);
+        _animator.SetFloat("HorizontalInput", WalkingDirection.x);
+        _animator.SetFloat("VerticalInput", WalkingDirection.y);
+        if (WalkingDirection.magnitude > 0)
+        {
+            _animator.SetFloat("LastHorizontalInput", WalkingDirection.x);
+            _animator.SetFloat("LastVerticalInput", WalkingDirection.y);
+        }
+
         if (Object.HasInputAuthority)
         {
-            var newCameraPosition = Vector2.Lerp(Camera.main.transform.position, transform.position, Time.deltaTime / 0.1f);
-            Camera.main.transform.position = new Vector3(newCameraPosition.x, newCameraPosition.y, -10f);
+            Camera.main.transform.SetParent(transform);
+            Camera.main.transform.localPosition = new Vector3(0f, 0f, -10f);
 
-            _healthBarBlood.fillAmount = (float)Health/MaxHealth;
+            _healthBarBlood.fillAmount = (float)Health / MaxHealth;
 
             Weapon? playerWeapon = FindObjectsOfType<InventorySlot>(includeInactive: true).Where(slot => slot.IsEquipmentSlot && slot.EquipmentType == EquipmentType.MAIN_HAND).FirstOrDefault()?.InventoryItem?.Item as Weapon;
             if (playerWeapon?.ItemId != _weaponFromServer?.ItemId || (playerWeapon == null && _weaponFromServer != null))
@@ -63,12 +75,12 @@ public class PlayerMovement : NetworkBehaviour
             }
 
             RPC_SendArmorUpdate(GetCurrentArmorTotal());
-        
+
             if (Input.GetKeyDown(KeyCode.T))
             {
                 RPC_SendMessage("ggez");
             }
-            
+
             if (Input.GetKeyDown(KeyCode.I))
             {
                 _inventoryScreen.SetActive(!_inventoryScreen.activeSelf);
@@ -126,18 +138,27 @@ public class PlayerMovement : NetworkBehaviour
         PlayerColor = color;
     }
 
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority, HostMode = RpcHostMode.SourceIsHostPlayer)]
+    public void RPC_SendWalkingDirectionUpdate(Vector2 walkingDirection, RpcInfo info = default)
+    {
+        // I am the State Authority here, so I can update the Networked property
+        WalkingDirection = walkingDirection;
+    }
+
     public override void FixedUpdateNetwork()
     {
         if (HasStateAuthority)
         {
             if (Health <= 0)
             {
+                Camera.main.transform.SetParent(null);
                 Runner.Despawn(Object);
+                return;
             }
 
             if (_outOfCombatDelay.ExpiredOrNotRunning(Runner) && _selfHealDelay.ExpiredOrNotRunning(Runner))
             {
-                Health = Math.Min(Health + MaxHealth/5, MaxHealth);
+                Health = Math.Min(Health + MaxHealth / 5, MaxHealth);
                 _selfHealDelay = TickTimer.CreateFromSeconds(Runner, 2);
             }
 
@@ -156,6 +177,11 @@ public class PlayerMovement : NetworkBehaviour
         if (GetInput(out NetworkInputData data))
         {
             data.direction.Normalize();
+
+            if (HasInputAuthority)
+            {
+                RPC_SendWalkingDirectionUpdate(data.direction);
+            }
 
             gameObject.GetComponent<Rigidbody2D>().MovePosition(gameObject.transform.position + _playerSpeed * data.direction * Runner.DeltaTime);
             gameObject.GetComponent<Rigidbody2D>().velocity = Vector2.zero;
@@ -177,13 +203,13 @@ public class PlayerMovement : NetworkBehaviour
 
             // If we are state authority, we can spawn attacks for other players
             // These attacks will only be executed on host and NOT predicted on clients
-            if (HasStateAuthority && _attackDelay.ExpiredOrNotRunning(Runner)  && data.buttons.IsSet(NetworkInputData.MOUSEBUTTON0))
+            if (HasStateAuthority && _attackDelay.ExpiredOrNotRunning(Runner) && data.buttons.IsSet(NetworkInputData.MOUSEBUTTON0))
             {
                 // Handle weapon attack
                 if (_weaponFromServer != null && _weaponFromServer.FireRate != 0)
                 {
                     // Limit shooting rate
-                    _attackDelay = TickTimer.CreateFromSeconds(Runner, 1f/_weaponFromServer.FireRate);
+                    _attackDelay = TickTimer.CreateFromSeconds(Runner, 1f / _weaponFromServer.FireRate);
 
                     Runner.Spawn(_prefabAttack, transform.position, Quaternion.identity, Object.InputAuthority,
                     (runner, o) =>
@@ -210,6 +236,8 @@ public class PlayerMovement : NetworkBehaviour
         Level = 1;
         KillsUntilLevelUp = 10;
 
+        _animator = GetComponent<Animator>();
+
         if (Object.HasInputAuthority)
         {
             // When a player first joins we run this code
@@ -220,7 +248,7 @@ public class PlayerMovement : NetworkBehaviour
             FindObjectsOfType<InventoryItem>(includeInactive: true).ForEach(inventoryItem => Destroy(inventoryItem));
             FindObjectsOfType<InventorySlot>(includeInactive: true).ForEach(inventorySlot => inventorySlot.SetInventoryItem(null));
             FindObjectOfType<Canvas>().transform.Find("Player Level").GetComponent<TextMeshProUGUI>().text = $"{Level}";
-            FindObjectOfType<Canvas>().transform.Find("XP Bar").GetComponent<Image>().fillAmount = (10 - KillsUntilLevelUp)/10f;
+            FindObjectOfType<Canvas>().transform.Find("XP Bar").GetComponent<Image>().fillAmount = (10 - KillsUntilLevelUp) / 10f;
 
             FindObjectsOfType<InventoryItem>(includeInactive: true).ForEach(item => Destroy(item.gameObject));
 
